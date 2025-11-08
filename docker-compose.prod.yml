@@ -1,0 +1,274 @@
+version: '3.8'
+
+name: hello-sekai-shop-production
+
+networks:
+  hello-sekai-network:
+    driver: bridge
+
+volumes:
+  auth-db-data:
+  item-db-data:
+  player-db-data:
+  inventory-db-data:
+  payment-db-data:
+  kafka-data:
+  zookeeper-data:
+
+services:
+  # Database Services
+  auth-db:
+    image: mongo:latest
+    container_name: auth-db
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+    volumes:
+      - auth-db-data:/data/db
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  item-db:
+    image: mongo:latest
+    container_name: item-db
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+    volumes:
+      - item-db-data:/data/db
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  player-db:
+    image: mongo:latest
+    container_name: player-db
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+    volumes:
+      - player-db-data:/data/db
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  inventory-db:
+    image: mongo:latest
+    container_name: inventory-db
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+    volumes:
+      - inventory-db-data:/data/db
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  payment-db:
+    image: mongo:latest
+    container_name: payment-db
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+    volumes:
+      - payment-db-data:/data/db
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka Services
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    container_name: zookeeper
+    restart: unless-stopped
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    volumes:
+      - zookeeper-data:/bitnami/zookeeper
+    networks:
+      - hello-sekai-network
+
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,PLAINTEXT_HOST://:29092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+    volumes:
+      - kafka-data:/bitnami/kafka
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: kafka-topics.sh --bootstrap-server localhost:9092 --list
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Application Services
+  auth-service:
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKER_USERNAME}/hello-sekai-shop:auth-${TAG:-latest}
+    container_name: auth-service
+    restart: unless-stopped
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      - ENV_FILE=/etc/env/.env.auth
+    volumes:
+      - ./env/prod/.env.auth:/etc/env/.env.auth:ro
+    ports:
+      - "1323:1323"
+      - "1423:1423"
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1323/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  item-service:
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKER_USERNAME}/hello-sekai-shop:item-${TAG:-latest}
+    container_name: item-service
+    restart: unless-stopped
+    depends_on:
+      item-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    environment:
+      - ENV_FILE=/etc/env/.env.item
+    volumes:
+      - ./env/prod/.env.item:/etc/env/.env.item:ro
+    ports:
+      - "1324:1324"
+      - "1524:1524"
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1324/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  player-service:
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKER_USERNAME}/hello-sekai-shop:player-${TAG:-latest}
+    container_name: player-service
+    restart: unless-stopped
+    depends_on:
+      player-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    environment:
+      - ENV_FILE=/etc/env/.env.player
+    volumes:
+      - ./env/prod/.env.player:/etc/env/.env.player:ro
+    ports:
+      - "1325:1325"
+      - "1625:1625"
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1325/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  inventory-service:
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKER_USERNAME}/hello-sekai-shop:inventory-${TAG:-latest}
+    container_name: inventory-service
+    restart: unless-stopped
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      item-service:
+        condition: service_healthy
+    environment:
+      - ENV_FILE=/etc/env/.env.inventory
+    volumes:
+      - ./env/prod/.env.inventory:/etc/env/.env.inventory:ro
+    ports:
+      - "1326:1326"
+      - "1726:1726"
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1326/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  payment-service:
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKER_USERNAME}/hello-sekai-shop:payment-${TAG:-latest}
+    container_name: payment-service
+    restart: unless-stopped
+    depends_on:
+      payment-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    environment:
+      - ENV_FILE=/etc/env/.env.payment
+    volumes:
+      - ./env/prod/.env.payment:/etc/env/.env.payment:ro
+    ports:
+      - "1327:1327"
+      - "1827:1827"
+    networks:
+      - hello-sekai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1327/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

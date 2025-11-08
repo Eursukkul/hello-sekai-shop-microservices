@@ -1,0 +1,152 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        default: 'latest'
+      deployment_method:
+        description: 'Deployment method'
+        required: true
+        default: 'docker-compose'
+        type: choice
+        options:
+          - docker-compose
+          - kubernetes
+
+jobs:
+  deploy-kubernetes:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    if: github.event.inputs.deployment_method == 'kubernetes'
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Configure Kubernetes
+      run: |
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig.yaml
+        export KUBECONFIG=kubeconfig.yaml
+        
+        # Update image tags for each service
+        kubectl set image deployment/auth-deployment auth=docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:auth-${{ github.event.inputs.tag }} -n hello-sekai-shop
+        kubectl set image deployment/item-deployment item=docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:item-${{ github.event.inputs.tag }} -n hello-sekai-shop
+        kubectl set image deployment/player-deployment player=docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:player-${{ github.event.inputs.tag }} -n hello-sekai-shop
+        kubectl set image deployment/inventory-deployment inventory=docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:inventory-${{ github.event.inputs.tag }} -n hello-sekai-shop
+        kubectl set image deployment/payment-deployment payment=docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:payment-${{ github.event.inputs.tag }} -n hello-sekai-shop
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/auth-deployment -n hello-sekai-shop
+        kubectl rollout status deployment/item-deployment -n hello-sekai-shop
+        kubectl rollout status deployment/player-deployment -n hello-sekai-shop
+        kubectl rollout status deployment/inventory-deployment -n hello-sekai-shop
+        kubectl rollout status deployment/payment-deployment -n hello-sekai-shop
+
+    - name: Deployment Summary
+      run: |
+        echo "## Kubernetes Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Deployment to **${{ github.event.inputs.environment }}** completed!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Details:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Environment: \`${{ github.event.inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Image Tag: \`${{ github.event.inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Deployed Services: auth, item, player, inventory, payment" >> $GITHUB_STEP_SUMMARY
+        echo "- Timestamp: $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  deploy-docker-compose:
+    name: Deploy with Docker Compose
+    runs-on: ubuntu-latest
+    if: github.event.inputs.deployment_method == 'docker-compose'
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Deploy to Server
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: ${{ secrets.SSH_PORT || 22 }}
+        script: |
+          cd /opt/hello-sekai-shop
+          
+          # Pull latest images
+          docker pull docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:auth-${{ github.event.inputs.tag }}
+          docker pull docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:item-${{ github.event.inputs.tag }}
+          docker pull docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:player-${{ github.event.inputs.tag }}
+          docker pull docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:inventory-${{ github.event.inputs.tag }}
+          docker pull docker.io/${{ secrets.DOCKER_USERNAME }}/hello-sekai-shop:payment-${{ github.event.inputs.tag }}
+          
+          # Update docker-compose.yml with new tags
+          export TAG=${{ github.event.inputs.tag }}
+          export DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}
+          
+          # Restart services
+          docker compose -f docker-compose.prod.yml down
+          docker compose -f docker-compose.prod.yml up -d
+          
+          # Clean up old images
+          docker image prune -f
+
+    - name: Deployment Summary
+      run: |
+        echo "## Docker Compose Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Deployment to **${{ github.event.inputs.environment }}** completed!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Details:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Environment: \`${{ github.event.inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Image Tag: \`${{ github.event.inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Deployed Services: auth, item, player, inventory, payment" >> $GITHUB_STEP_SUMMARY
+        echo "- Deployment Host: \`${{ secrets.DEPLOY_HOST }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Timestamp: $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  health-check:
+    name: Health Check
+    runs-on: ubuntu-latest
+    needs: [deploy-docker-compose]
+    if: github.event.inputs.deployment_method == 'docker-compose'
+    
+    steps:
+    - name: Wait for services to be ready
+      run: sleep 30
+
+    - name: Health Check Instructions
+      run: |
+        echo "## Health Check Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ Manual health check required" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Please verify services are running on your deployment server:" >> $GITHUB_STEP_SUMMARY
+        echo "- Auth: http://YOUR_SERVER:1323/health" >> $GITHUB_STEP_SUMMARY
+        echo "- Item: http://YOUR_SERVER:1324/health" >> $GITHUB_STEP_SUMMARY
+        echo "- Player: http://YOUR_SERVER:1325/health" >> $GITHUB_STEP_SUMMARY
+        echo "- Inventory: http://YOUR_SERVER:1326/health" >> $GITHUB_STEP_SUMMARY
+        echo "- Payment: http://YOUR_SERVER:1327/health" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "You can check all services with:" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+        echo "docker compose -f docker-compose.prod.yml ps" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+

@@ -21,7 +21,13 @@
 go.work
 
 # Environment
-/env/prod
+/env/prod/*.env.auth
+/env/prod/*.env.item
+/env/prod/*.env.player
+/env/prod/*.env.inventory
+/env/prod/*.env.payment
+.env
+!.env.example
 *.toml
 /certs
 /env/dev/resolv.conf
@@ -32,5 +38,8 @@ go.work
 /env/compose/hosts
 /build
 command.txt
+
+# GitHub Actions artifacts
+bin/
 
 # End of https://www.toptal.com/developers/gitignore/api/go
